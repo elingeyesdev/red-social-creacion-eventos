@@ -1,0 +1,891 @@
+// =====================================================
+// 🛠️ edit-event.js — COMPLETO Y FUNCIONAL
+// =====================================================
+
+const token = localStorage.getItem("token");
+const sqlUserId = localStorage.getItem("id_usuario");
+
+if (!token) {
+    // La función mostrarNotificacion se definirá más adelante
+    setTimeout(() => {
+        if (typeof mostrarNotificacion === 'function') {
+            mostrarNotificacion("error", "Acceso denegado", "Debe iniciar sesión");
+        } else {
+            alert("Debe iniciar sesión");
+        }
+        window.location.href = "/login";
+    }, 100);
+}
+
+const eventoId = window.location.pathname.split("/")[3];
+
+// Función helper para construir URL de imagen
+function buildImageUrl(imgUrl) {
+    if (!imgUrl || imgUrl.trim() === '') return null;
+    
+    if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
+        return imgUrl;
+    }
+    
+    if (imgUrl.startsWith('/storage/')) {
+        return `${window.location.origin}${imgUrl}`;
+    }
+    
+    if (imgUrl.startsWith('storage/')) {
+        return `${window.location.origin}/${imgUrl}`;
+    }
+    
+    return `${window.location.origin}/storage/${imgUrl}`;
+}
+
+// Array para almacenar imágenes existentes que se mantendrán
+let imagenesExistentes = [];
+let imagenesAEliminar = [];
+let urlImages = []; // Array para almacenar URLs de imágenes nuevas
+
+// ===============================
+// 🗺️ MAPA LEAFLET
+// ===============================
+let map, clickMarker;
+let ciudadDetectada = "";
+
+function initMap() {
+    const pos = [-16.5, -68.15]; // La Paz, Bolivia por defecto
+
+    // Verificar que el elemento del mapa exista
+    const mapElement = document.getElementById("map");
+    if (!mapElement) {
+        console.warn("Elemento del mapa no encontrado");
+        return;
+    }
+
+    map = L.map("map").setView(pos, 13);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+    map.on("click", (e) => {
+        const { lat, lng } = e.latlng;
+
+        if (clickMarker) clickMarker.setLatLng(e.latlng);
+        else clickMarker = L.marker(e.latlng).addTo(map);
+
+        const latInput = document.getElementById("lat");
+        const lngInput = document.getElementById("lng");
+        
+        if (latInput) latInput.value = lat;
+        if (lngInput) lngInput.value = lng;
+
+        reverseGeocode(lat, lng);
+    });
+}
+
+// ===============================
+// 🌍 GEOCODIFICACIÓN INVERSA
+// ===============================
+async function reverseGeocode(lat, lng) {
+    try {
+        const r = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`
+        );
+        const data = await r.json();
+
+        const direccion = data.display_name ?? "";
+        document.getElementById("locacion").value = direccion;
+        
+        // Actualizar también el campo de dirección si está vacío
+        const direccionInput = document.getElementById("direccion");
+        if (!direccionInput.value) {
+            direccionInput.value = direccion;
+        }
+
+        ciudadDetectada =
+            data.address?.city ||
+            data.address?.town ||
+            data.address?.village ||
+            data.address?.state ||
+            "Sin especificar";
+
+        document.getElementById("ciudadInfo").innerText = "Ciudad: " + ciudadDetectada;
+
+        // Actualizar también el campo de ciudad si está vacío
+        const ciudadInput = document.getElementById("ciudad");
+        if (!ciudadInput.value) {
+            ciudadInput.value = ciudadDetectada;
+        }
+
+    } catch (e) {
+        console.warn("No se pudo obtener dirección");
+    }
+}
+
+// =====================================================
+// Función para cargar/recargar datos del evento
+// =====================================================
+async function cargarDatosEvento() {
+    try {
+        // Agregar timestamp para evitar caché
+        const timestamp = new Date().getTime();
+        const res = await fetch(`${API_BASE_URL}/api/eventos/detalle/${eventoId}?_t=${timestamp}`, {
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Accept": "application/json",
+                "Cache-Control": "no-cache"
+            }
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+            mostrarNotificacion("error", "Error", "Error cargando datos del evento");
+            return false;
+        }
+
+        const e = data.evento;
+
+        // Guardar datos originales del evento para referencia
+        window.eventoOriginal = {
+            lat: e.lat,
+            lng: e.lng,
+            direccion: e.direccion,
+            ciudad: e.ciudad
+        };
+
+        // Rellenar campos del formulario
+        document.getElementById("titulo").value = e.titulo || "";
+        document.getElementById("descripcion").value = e.descripcion || "";
+        document.getElementById("tipo_evento").value = e.tipo_evento || "";
+
+        document.getElementById("fecha_inicio").value =
+            e.fecha_inicio ? e.fecha_inicio.replace(" ", "T") : "";
+
+        document.getElementById("fecha_fin").value =
+            e.fecha_fin ? e.fecha_fin.replace(" ", "T") : "";
+
+        document.getElementById("fecha_limite_inscripcion").value =
+            e.fecha_limite_inscripcion ? e.fecha_limite_inscripcion.replace(" ", "T") : "";
+
+        document.getElementById("capacidad_maxima").value = e.capacidad_maxima ?? "";
+        document.getElementById("estado").value = e.estado ?? "borrador";
+
+        document.getElementById("ciudad").value = e.ciudad ?? "";
+        document.getElementById("direccion").value = e.direccion ?? "";
+
+        // Actualizar coordenadas del mapa si existen
+        if (e.lat && e.lng) {
+            const lat = parseFloat(e.lat);
+            const lng = parseFloat(e.lng);
+            
+            if (!isNaN(lat) && !isNaN(lng)) {
+                // Establecer la vista del mapa en la ubicación existente
+                if (map) {
+                map.setView([lat, lng], 13);
+                
+                    // Actualizar marcador
+                if (clickMarker) {
+                    clickMarker.setLatLng([lat, lng]);
+                } else {
+                    clickMarker = L.marker([lat, lng]).addTo(map);
+                    }
+                }
+                
+                // Establecer valores en los campos ocultos
+                const latInput = document.getElementById("lat");
+                const lngInput = document.getElementById("lng");
+                const locacionInput = document.getElementById("locacion");
+                
+                if (latInput) latInput.value = lat;
+                if (lngInput) lngInput.value = lng;
+                
+                // Si hay dirección, establecerla en el campo de locación
+                if (e.direccion && locacionInput) {
+                    locacionInput.value = e.direccion;
+                } else if (locacionInput && !locacionInput.value) {
+                    // Si no hay dirección, hacer geocodificación inversa
+                    reverseGeocode(lat, lng);
+                }
+                
+                // Establecer ciudad si existe
+                if (e.ciudad) {
+                    ciudadDetectada = e.ciudad;
+                    const ciudadInfo = document.getElementById("ciudadInfo");
+                    if (ciudadInfo) {
+                        ciudadInfo.innerText = "Ciudad: " + ciudadDetectada;
+                    }
+                } else {
+                    // Si no hay ciudad, intentar obtenerla de la geocodificación
+                    reverseGeocode(lat, lng);
+                }
+            }
+        }
+
+        // Cargar imágenes existentes
+        if (e.imagenes && Array.isArray(e.imagenes) && e.imagenes.length > 0) {
+            imagenesExistentes = e.imagenes.filter(img => img && img.trim() !== '');
+            mostrarImagenesExistentes(imagenesExistentes);
+        } else {
+            document.getElementById("imagenesExistentes").innerHTML = '<p class="text-muted">No hay imágenes disponibles</p>';
+        }
+
+        // Limpiar nuevas imágenes y URLs agregadas (ya que se guardaron)
+        const nuevasImagenesInput = document.getElementById("nuevasImagenes");
+        if (nuevasImagenesInput) {
+            nuevasImagenesInput.value = "";
+        }
+        const previewNuevasImagenes = document.getElementById("previewNuevasImagenes");
+        if (previewNuevasImagenes) {
+            previewNuevasImagenes.innerHTML = "";
+        }
+        urlImages = [];
+        updateUrlImagesPreview();
+
+        return true;
+    } catch (e) {
+        console.error(e);
+        mostrarNotificacion("error", "Error", "Error obteniendo los datos del evento");
+        return false;
+    }
+}
+
+// Función para recargar datos después de actualizar
+async function recargarDatosEvento() {
+    // Esperar un momento para que el servidor procese los cambios
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Recargar datos
+    const exito = await cargarDatosEvento();
+    
+    if (exito) {
+        // Mostrar notificación de actualización exitosa
+        setTimeout(() => {
+            mostrarNotificacion("success", "Datos actualizados", "Los datos del evento se han actualizado correctamente en la pantalla");
+        }, 300);
+    }
+}
+
+// =====================================================
+// 1. Cargar datos del evento al cargar la página
+// =====================================================
+document.addEventListener("DOMContentLoaded", async () => {
+    // Inicializar mapa primero
+    initMap();
+    
+    // Luego cargar datos
+    await cargarDatosEvento();
+});
+
+// Función para mostrar imágenes existentes
+function mostrarImagenesExistentes(imagenes) {
+    const container = document.getElementById("imagenesExistentes");
+    
+    if (!imagenes || imagenes.length === 0) {
+        container.innerHTML = '<p class="text-muted">No hay imágenes disponibles</p>';
+        return;
+    }
+
+    container.innerHTML = '';
+    imagenes.forEach((imgUrl, index) => {
+        const fullUrl = buildImageUrl(imgUrl);
+        if (!fullUrl) return;
+
+        const div = document.createElement('div');
+        div.className = 'imagen-item';
+        div.innerHTML = `
+            <img src="${fullUrl}" alt="Imagen ${index + 1}" 
+                 onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'150\\' height=\\'150\\'%3E%3Crect fill=\\'%23f8f9fa\\' width=\\'150\\' height=\\'150\\'/%3E%3Ctext x=\\'50%25\\' y=\\'50%25\\' text-anchor=\\'middle\\' dy=\\'.3em\\' fill=\\'%23adb5bd\\' font-family=\\'Arial\\' font-size=\\'12\\'%3EError%3C/text%3E%3C/svg%3E';">
+            <button type="button" class="btn-eliminar" onclick="eliminarImagenExistente('${imgUrl}', ${index})" title="Eliminar imagen">
+                <i class="fas fa-times"></i>
+            </button>
+        `;
+        container.appendChild(div);
+    });
+}
+
+// Función para eliminar imagen existente
+function eliminarImagenExistente(imgUrl, index) {
+    if (confirm('¿Estás seguro de que deseas eliminar esta imagen?')) {
+        imagenesExistentes = imagenesExistentes.filter((img, i) => i !== index);
+        imagenesAEliminar.push(imgUrl);
+        mostrarImagenesExistentes(imagenesExistentes);
+    }
+}
+
+// Preview de nuevas imágenes
+document.getElementById("nuevasImagenes").addEventListener("change", function(e) {
+    const previewContainer = document.getElementById("previewNuevasImagenes");
+    previewContainer.innerHTML = '';
+    
+    const files = Array.from(e.target.files);
+    files.forEach((file, index) => {
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.alt = `Preview ${index + 1}`;
+                previewContainer.appendChild(img);
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+});
+
+// ===============================
+// 🖼️ IMÁGENES POR URL
+// ===============================
+function addUrlImage(url) {
+    // Verificar si la URL ya existe
+    if (urlImages.includes(url)) {
+        mostrarNotificacion("warning", "URL duplicada", "Esta URL ya ha sido agregada");
+        return;
+    }
+
+    urlImages.push(url);
+    updateUrlImagesPreview();
+}
+
+function updateUrlImagesPreview() {
+    const container = document.getElementById('urlImagesContainerEdit');
+    if (!container) return;
+    
+    container.innerHTML = '';
+
+    if (urlImages.length === 0) {
+        return;
+    }
+
+    urlImages.forEach((url, index) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'image-preview-wrapper-url';
+        
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = `Imagen URL ${index + 1}`;
+        img.style.cssText = 'width: 100%; height: 150px; object-fit: cover; cursor: pointer;';
+        img.onclick = () => window.open(url, '_blank');
+        img.onerror = function() {
+            this.onerror = null;
+            this.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="150" height="150"%3E%3Crect fill="%23f8f9fa" width="150" height="150"/%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em" fill="%23adb5bd" font-family="Arial" font-size="12"%3EError cargando%3C/text%3E%3C/svg%3E';
+            this.style.objectFit = 'contain';
+            this.style.padding = '10px';
+        };
+        
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'remove-image';
+        removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+        removeBtn.onclick = () => removeUrlImage(index);
+        
+        wrapper.appendChild(img);
+        wrapper.appendChild(removeBtn);
+        container.appendChild(wrapper);
+    });
+}
+
+function removeUrlImage(index) {
+    urlImages.splice(index, 1);
+    updateUrlImagesPreview();
+}
+
+// Event listeners para agregar URL
+document.addEventListener('DOMContentLoaded', function() {
+    const btnAgregarUrl = document.getElementById('btnAgregarUrlEdit');
+    const imagenUrlInput = document.getElementById('imagen_url_edit');
+    
+    if (btnAgregarUrl) {
+        btnAgregarUrl.addEventListener('click', function() {
+            const url = imagenUrlInput.value.trim();
+            
+            if (!url) {
+                mostrarNotificacion("warning", "URL vacía", "Por favor ingresa una URL válida");
+                return;
+            }
+
+            // Validar que sea una URL válida
+            try {
+                new URL(url);
+            } catch (e) {
+                mostrarNotificacion("error", "URL inválida", "Por favor ingresa una URL válida (ej: https://ejemplo.com/imagen.jpg)");
+                return;
+            }
+
+            // Verificar que sea una imagen (por extensión)
+            const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+            const isImage = imageExtensions.some(ext => url.toLowerCase().includes(ext)) || 
+                           url.match(/\.(jpg|jpeg|png|gif|webp)(\?|$)/i);
+
+            if (!isImage) {
+                if (confirm('La URL no parece ser una imagen. ¿Deseas agregarla de todos modos?')) {
+                    addUrlImage(url);
+                    imagenUrlInput.value = '';
+                }
+            } else {
+                addUrlImage(url);
+                imagenUrlInput.value = '';
+            }
+        });
+    }
+
+    // Permitir agregar URL con Enter
+    if (imagenUrlInput) {
+        imagenUrlInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (btnAgregarUrl) btnAgregarUrl.click();
+            }
+        });
+    }
+    
+    // Validar capacidad máxima en tiempo real (solo números)
+    const capacidadInput = document.getElementById("capacidad_maxima");
+    if (capacidadInput) {
+        capacidadInput.addEventListener("input", function(e) {
+            // Remover cualquier carácter que no sea número
+            let value = this.value.replace(/[^0-9]/g, '');
+            if (this.value !== value) {
+                this.value = value;
+                mostrarNotificacion("warning", "Carácter inválido", "Solo se permiten números en este campo");
+            }
+        });
+        
+        capacidadInput.addEventListener("paste", function(e) {
+            e.preventDefault();
+            const paste = (e.clipboardData || window.clipboardData).getData('text');
+            const numbersOnly = paste.replace(/[^0-9]/g, '');
+            if (numbersOnly !== paste) {
+                mostrarNotificacion("warning", "Contenido inválido", "Solo se permiten números. Se han eliminado los caracteres no numéricos");
+            }
+            this.value = numbersOnly;
+        });
+    }
+});
+
+// =====================================================
+// 2. Enviar actualización
+// =====================================================
+document.getElementById("editEventForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    // ===============================
+    // VALIDACIÓN DE CAMPOS OBLIGATORIOS
+    // ===============================
+    const titulo = document.getElementById("titulo").value.trim();
+    const tipoEvento = document.getElementById("tipo_evento").value;
+    const fechaInicio = document.getElementById("fecha_inicio").value;
+    const estado = document.getElementById("estado").value;
+
+    // Validar título
+    if (!titulo) {
+        mostrarNotificacion("error", "Campo requerido", "El título del evento es obligatorio");
+        document.getElementById("titulo").focus();
+        return;
+    }
+
+    // Validar tipo de evento
+    if (!tipoEvento || tipoEvento === "") {
+        mostrarNotificacion("error", "Campo requerido", "Debes seleccionar un tipo de evento");
+        document.getElementById("tipo_evento").focus();
+        return;
+    }
+
+    // Validar fecha de inicio
+    if (!fechaInicio) {
+        mostrarNotificacion("error", "Campo requerido", "La fecha de inicio es obligatoria");
+        document.getElementById("fecha_inicio").focus();
+        return;
+    }
+
+    // Validar estado
+    if (!estado || estado === "") {
+        mostrarNotificacion("error", "Campo requerido", "Debes seleccionar un estado para el evento");
+        document.getElementById("estado").focus();
+        return;
+    }
+
+    // Validar fecha de inicio (permitir fechas pasadas para eventos existentes)
+    const fechaInicioDate = new Date(fechaInicio);
+    // No validamos que sea futura porque puede ser un evento existente que se está editando
+
+    // Validar fecha de fin si está presente
+    const fechaFin = document.getElementById("fecha_fin").value;
+    if (fechaFin) {
+        const fechaFinDate = new Date(fechaFin);
+        if (fechaFinDate <= fechaInicioDate) {
+            mostrarNotificacion("error", "Fecha inválida", "La fecha de finalización debe ser posterior a la fecha de inicio");
+            document.getElementById("fecha_fin").focus();
+            return;
+        }
+    }
+
+    // Validar fecha límite de inscripción si está presente
+    const fechaLimiteInscripcion = document.getElementById("fecha_limite_inscripcion").value;
+    if (fechaLimiteInscripcion) {
+        const fechaLimiteDate = new Date(fechaLimiteInscripcion);
+        if (fechaLimiteDate >= fechaInicioDate) {
+            mostrarNotificacion("error", "Fecha inválida", "La fecha límite de inscripción debe ser anterior a la fecha de inicio");
+            document.getElementById("fecha_limite_inscripcion").focus();
+            return;
+        }
+    }
+
+    // Validar capacidad máxima (solo números)
+    const capacidadMaxima = document.getElementById("capacidad_maxima").value.trim();
+    if (capacidadMaxima) {
+        // Verificar que solo contenga números
+        if (!/^\d+$/.test(capacidadMaxima)) {
+            mostrarNotificacion("error", "Valor inválido", "La capacidad máxima debe ser un número válido (solo números, sin letras, símbolos ni espacios)");
+            document.getElementById("capacidad_maxima").focus();
+            document.getElementById("capacidad_maxima").value = "";
+            return;
+        }
+        // Verificar que sea mayor a 0
+        const capacidadNum = parseInt(capacidadMaxima, 10);
+        if (isNaN(capacidadNum) || capacidadNum < 1) {
+            mostrarNotificacion("error", "Valor inválido", "La capacidad máxima debe ser un número mayor a 0");
+            document.getElementById("capacidad_maxima").focus();
+            document.getElementById("capacidad_maxima").value = "";
+            return;
+        }
+    }
+
+    // Preparar FormData para enviar archivos
+    const formData = new FormData();
+    
+    // Datos básicos
+    formData.append("titulo", titulo);
+    formData.append("descripcion", document.getElementById("descripcion").value || "");
+    formData.append("tipo_evento", tipoEvento);
+    formData.append("fecha_inicio", fechaInicio);
+    formData.append("fecha_fin", fechaFin || "");
+    formData.append("fecha_limite_inscripcion", fechaLimiteInscripcion || "");
+    
+    // Capacidad máxima (solo números válidos)
+    if (capacidadMaxima && /^\d+$/.test(capacidadMaxima)) {
+        formData.append("capacidad_maxima", parseInt(capacidadMaxima, 10));
+    }
+    
+    formData.append("estado", estado);
+    
+    // Coordenadas del mapa - SIEMPRE enviar si están disponibles
+    const latInput = document.getElementById("lat");
+    const lngInput = document.getElementById("lng");
+    const locacionInput = document.getElementById("locacion");
+    
+    let lat = latInput ? latInput.value.trim() : "";
+    let lng = lngInput ? lngInput.value.trim() : "";
+    const locacion = locacionInput ? locacionInput.value.trim() : "";
+    
+    // Si no hay coordenadas en los campos ocultos pero hay coordenadas en el evento original, mantenerlas
+    // Esto asegura que si el usuario no cambia la ubicación, se mantengan las coordenadas originales
+    if ((!lat || !lng) && window.eventoOriginal) {
+        if (window.eventoOriginal.lat && window.eventoOriginal.lng) {
+            lat = window.eventoOriginal.lat.toString();
+            lng = window.eventoOriginal.lng.toString();
+        }
+    }
+    
+    // Enviar coordenadas si están disponibles (incluso si no se cambió la ubicación)
+    if (lat && lng) {
+        const latNum = parseFloat(lat);
+        const lngNum = parseFloat(lng);
+        if (!isNaN(latNum) && !isNaN(lngNum)) {
+            formData.append("lat", latNum);
+            formData.append("lng", lngNum);
+        }
+    }
+    
+    // Ciudad y dirección - usar la dirección del mapa si está disponible, sino la del campo
+    const ciudadValue = ciudadDetectada || document.getElementById("ciudad").value || "";
+    const direccionValue = locacion || document.getElementById("direccion").value || "";
+    
+    formData.append("ciudad", ciudadValue);
+    formData.append("direccion", direccionValue);
+
+    // Agregar nuevas imágenes (archivos)
+    const nuevasImagenesInput = document.getElementById("nuevasImagenes");
+    if (nuevasImagenesInput.files.length > 0) {
+        Array.from(nuevasImagenesInput.files).forEach((file) => {
+            formData.append("imagenes[]", file);
+        });
+    }
+
+    // Agregar imágenes existentes que se mantendrán (como JSON)
+    formData.append("imagenes_json", JSON.stringify(imagenesExistentes));
+    
+    // Agregar URLs de imágenes nuevas como JSON string
+    if (urlImages.length > 0) {
+        formData.append("imagenes_urls", JSON.stringify(urlImages));
+    }
+
+    // Mostrar indicador de carga
+    const submitBtn = document.querySelector('button[type="submit"]');
+    const originalBtnText = submitBtn ? submitBtn.innerHTML : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Guardando...';
+    }
+
+    // Log de datos que se van a enviar
+    console.log("=== ENVIANDO ACTUALIZACIÓN DE EVENTO ===");
+    console.log("Evento ID:", eventoId);
+    console.log("Datos del FormData:");
+    for (let pair of formData.entries()) {
+        console.log(pair[0] + ': ' + (typeof pair[1] === 'object' ? '[File]' : pair[1]));
+    }
+
+    try {
+        // Usar POST directamente (la ruta API acepta tanto POST como PUT)
+        const res = await fetch(`${API_BASE_URL}/api/eventos/${eventoId}`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Accept": "application/json"
+                // NO incluir Content-Type, el navegador lo establecerá automáticamente con el boundary para FormData
+            },
+            body: formData
+        });
+
+        console.log("Respuesta del servidor - Status:", res.status);
+        const data = await res.json();
+        console.log("Respuesta del servidor - Data:", data);
+
+        // Restaurar botón
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnText;
+        }
+
+        if (!res.ok || !data.success) {
+            // Si hay errores de validación, mostrarlos
+            let mensajeError = data.error || "Ocurrió un error inesperado";
+            
+            if (data.errors && typeof data.errors === 'object') {
+                const erroresArray = Object.entries(data.errors).map(([campo, mensajes]) => {
+                    const mensaje = Array.isArray(mensajes) ? mensajes[0] : mensajes;
+                    // Traducir nombres de campos al español
+                    const camposTraducidos = {
+                        'titulo': 'Título',
+                        'tipo_evento': 'Tipo de evento',
+                        'fecha_inicio': 'Fecha de inicio',
+                        'fecha_fin': 'Fecha de finalización',
+                        'fecha_limite_inscripcion': 'Fecha límite de inscripción',
+                        'estado': 'Estado',
+                        'capacidad_maxima': 'Capacidad máxima',
+                        'patrocinadores': 'Patrocinadores',
+                        'invitados': 'Invitados'
+                    };
+                    const campoTraducido = camposTraducidos[campo] || campo;
+                    return `${campoTraducido}: ${mensaje}`;
+                });
+                mensajeError = erroresArray.join('\n');
+            }
+            
+            console.error("Error al actualizar evento:", data);
+            mostrarNotificacion("error", "Error al actualizar evento", mensajeError);
+            return;
+        }
+
+        // Mostrar notificación de éxito
+        console.log("Evento actualizado exitosamente:", data.evento);
+        mostrarNotificacion("success", "Evento actualizado", "El evento ha sido actualizado exitosamente. Redirigiendo a detalles...");
+        
+        // Redirigir a la pantalla de detalles del evento después de 1.5 segundos
+        setTimeout(() => {
+            window.location.href = `/ong/eventos/${eventoId}/detalle`;
+        }, 1500);
+
+    } catch (err) {
+        console.error("Error de conexión:", err);
+        
+        // Restaurar botón en caso de error
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnText;
+        }
+        
+        mostrarNotificacion("error", "Error de servidor", "No se pudo conectar con el servidor: " + err.message);
+    }
+});
+
+// ===============================
+// 🔔 FUNCIÓN DE NOTIFICACIONES (MISMA QUE CREATE)
+// ===============================
+function mostrarNotificacion(tipo, titulo, mensaje) {
+    // Crear contenedor de toasts si no existe
+    let toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toast-container';
+        toastContainer.className = 'toast-container position-fixed';
+        toastContainer.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+        document.body.appendChild(toastContainer);
+    }
+
+    // Colores y estilos mejorados según el tipo
+    const colores = {
+        success: { 
+            bg: 'linear-gradient(135deg, #28a745 0%, #20c997 100%)',
+            icon: 'fa-check-circle', 
+            iconBg: '#28a745',
+            text: '#ffffff',
+            border: '#28a745',
+            shadow: '0 8px 20px rgba(40, 167, 69, 0.3)'
+        },
+        error: { 
+            bg: 'linear-gradient(135deg, #dc3545 0%, #e83e8c 100%)',
+            icon: 'fa-exclamation-circle', 
+            iconBg: '#dc3545',
+            text: '#ffffff',
+            border: '#dc3545',
+            shadow: '0 8px 20px rgba(220, 53, 69, 0.3)'
+        },
+        warning: { 
+            bg: 'linear-gradient(135deg, #ffc107 0%, #fd7e14 100%)',
+            icon: 'fa-exclamation-triangle', 
+            iconBg: '#ffc107',
+            text: '#212529',
+            border: '#ffc107',
+            shadow: '0 8px 20px rgba(255, 193, 7, 0.3)'
+        },
+        info: { 
+            bg: 'linear-gradient(135deg, #17a2b8 0%, #6f42c1 100%)',
+            icon: 'fa-info-circle', 
+            iconBg: '#17a2b8',
+            text: '#ffffff',
+            border: '#17a2b8',
+            shadow: '0 8px 20px rgba(23, 162, 184, 0.3)'
+        }
+    };
+
+    const color = colores[tipo] || colores.info;
+
+    // Crear el toast con diseño mejorado
+    const toastId = 'toast-' + Date.now();
+    const toast = document.createElement('div');
+    toast.id = toastId;
+    toast.setAttribute('role', 'alert');
+    toast.setAttribute('aria-live', 'assertive');
+    toast.setAttribute('aria-atomic', 'true');
+    
+    // Estilos personalizados para el toast
+    toast.style.cssText = `
+        min-width: 350px;
+        max-width: 400px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: ${color.shadow};
+        overflow: hidden;
+        margin-bottom: 15px;
+        animation: slideInRight 0.4s ease-out;
+        border-left: 4px solid ${color.border};
+        transition: all 0.3s ease;
+    `;
+
+    toast.innerHTML = `
+        <div style="
+            background: ${color.bg};
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        ">
+            <div style="
+                width: 40px;
+                height: 40px;
+                background: rgba(255, 255, 255, 0.2);
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-shrink: 0;
+            ">
+                <i class="fas ${color.icon}" style="
+                    font-size: 20px;
+                    color: ${color.text};
+                "></i>
+            </div>
+            <div style="flex: 1; min-width: 0;">
+                <strong style="
+                    display: block;
+                    color: ${color.text};
+                    font-size: 16px;
+                    font-weight: 600;
+                    margin-bottom: 2px;
+                    line-height: 1.3;
+                ">${titulo}</strong>
+                <p style="
+                    margin: 0;
+                    color: ${color.text};
+                    font-size: 13px;
+                    opacity: 0.95;
+                    line-height: 1.4;
+                    white-space: pre-line;
+                ">${mensaje}</p>
+            </div>
+            <button type="button" onclick="this.closest('[role=alert]').remove()" style="
+                background: rgba(255, 255, 255, 0.2);
+                border: none;
+                color: ${color.text};
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 14px;
+                transition: all 0.2s;
+                flex-shrink: 0;
+            " onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+
+    // Agregar animación CSS si no existe
+    if (!document.getElementById('toast-animations')) {
+        const style = document.createElement('style');
+        style.id = 'toast-animations';
+        style.textContent = `
+            @keyframes slideInRight {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+            @keyframes slideOutRight {
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                to {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+            }
+            #toast-container [role=alert] {
+                animation: slideInRight 0.4s ease-out;
+            }
+            #toast-container [role=alert].removing {
+                animation: slideOutRight 0.3s ease-in forwards;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    toastContainer.appendChild(toast);
+
+    // Auto-remover después de 4 segundos con animación
+    setTimeout(() => {
+        const toastElement = document.getElementById(toastId);
+        if (toastElement) {
+            toastElement.classList.add('removing');
+            setTimeout(() => {
+                toastElement.remove();
+            }, 300);
+        }
+    }, 4000);
+}
