@@ -1,0 +1,18 @@
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Support\Facades\Route;
+use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
+
+class RouteServiceProvider extends ServiceProvider
+{
+    /**
+     * Define your route model bindings, pattern filters, and other route configuration.
+     */
+    public function boot(): void
+    {
+        // ⚙️ Las rutas API y Web ahora se cargan desde bootstrap/app.php
+        // No cargar aquí para evitar duplicación
+    }
+}
